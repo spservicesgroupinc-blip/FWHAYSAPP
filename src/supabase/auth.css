@@ -1,0 +1,9 @@
+.auth-page { min-height: 100dvh; display: grid; place-items: center; padding: 24px; background: #f2f4f7; }
+.auth-card { width: min(100%, 420px); padding: 28px; border: 1px solid #d8dee6; border-radius: 12px; background: white; box-shadow: 0 12px 35px #18223312; }
+.auth-card h1 { margin: 0 0 8px; font-size: 1.5rem; }
+.auth-card p { color: #465465; line-height: 1.5; }
+.auth-card form { display: grid; gap: 16px; margin: 24px 0 16px; }
+.auth-card label { display: grid; gap: 6px; font-weight: 600; }
+.auth-card input { min-height: 44px; padding: 9px 12px; border: 1px solid #9aa6b2; border-radius: 6px; }
+.auth-card .button { min-height: 44px; margin: 4px 8px 4px 0; }
+.auth-card .auth-message { margin: 0; }
