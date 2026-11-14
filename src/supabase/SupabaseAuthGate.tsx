@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { getSupabaseClient } from "./client";
+import { AuthForm } from "./AuthForm";
 import "./auth.css";
 
 type Membership = "checking" | "allowed" | "denied" | "error";
@@ -31,7 +32,7 @@ export function SupabaseAuthGate({ children }: { children: ReactNode }) {
       membershipGeneration.current += 1;
       setMembership("checking");
       setCheckVersion((value) => value + 1);
-      if (event === "PASSWORD_RECOVERY") setPasswordSetup(true);
+      if (event === "PASSWORD_RECOVERY") { setResetRequested(false); setPasswordSetup(true); }
       if (event === "SIGNED_OUT") setPasswordSetup(false);
       setSession(nextSession);
       setInitialized(true);
@@ -94,10 +95,15 @@ export function SupabaseAuthGate({ children }: { children: ReactNode }) {
   async function signOut() {
     if (!client) return;
     setBusy(true);
-    const { error } = await client.auth.signOut();
-    setBusy(false);
-    if (error) setMessage("Could not sign out. Please try again.");
-    else { setMessage(""); setPassword(""); }
+    try {
+      const { error } = await client.auth.signOut();
+      if (error) throw error;
+      setMessage(""); setPassword("");
+    } catch {
+      setMessage("Could not sign out. Please try again.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   if (!client) return <main className="auth-page"><section className="auth-card"><h1>Workspace unavailable</h1><p>Staff sign-in is not configured. Contact your administrator.</p></section></main>;
@@ -106,22 +112,13 @@ export function SupabaseAuthGate({ children }: { children: ReactNode }) {
   if (session && !passwordSetup && membership === "allowed") return <>{children}</>;
   if (session && !passwordSetup) return <main className="auth-page"><section className="auth-card">
     <h1>{membership === "checking" ? "Checking access…" : membership === "denied" ? "Access not available" : "Unable to check access"}</h1>
-    <p>{membership === "checking" ? "Please wait." : membership === "denied" ? "Your account is not approved for this workspace. Contact your administrator." : "Check your connection and try again."}</p>
+    <p role={membership === "checking" ? "status" : undefined}>{membership === "checking" ? "Please wait." : membership === "denied" ? "Your account is not approved for this workspace. Contact your administrator." : "Check your connection and try again."}</p>
     {message && <p role="alert">{message}</p>}
     {membership === "error" && <button className="button primary" onClick={() => setCheckVersion((value) => value + 1)}>Try again</button>}
     <button className="button" disabled={busy} onClick={() => void signOut()}>Sign out</button>
   </section></main>;
 
-  return <main className="auth-page"><section className="auth-card">
-    <h1>{passwordSetup ? "Set your password" : resetRequested ? "Reset your password" : "Staff sign in"}</h1>
-    <p>{passwordSetup ? "Choose a password to finish setting up your account." : resetRequested ? "Enter your work email to request a reset link." : "Sign in with your invited staff account."}</p>
-    <form onSubmit={(event) => void submit(event)}>
-      {!passwordSetup && <label>Email<input type="email" autoComplete="username" required value={email} onChange={(event) => setEmail(event.target.value)} /></label>}
-      {!resetRequested && <label>Password<input type="password" autoComplete={passwordSetup ? "new-password" : "current-password"} minLength={passwordSetup ? 6 : undefined} required value={password} onChange={(event) => setPassword(event.target.value)} /></label>}
-      {message && <p role="status" className="auth-message">{message}</p>}
-      <button className="button primary" disabled={busy} type="submit">{busy ? "Please wait…" : passwordSetup ? "Save password" : resetRequested ? "Send reset link" : "Sign in"}</button>
-    </form>
-    {!passwordSetup && <button className="text-button" type="button" onClick={() => { setResetRequested(!resetRequested); setMessage(""); }}>{resetRequested ? "Back to sign in" : "Forgot password?"}</button>}
-    {passwordSetup && session && <button className="text-button" type="button" onClick={() => void signOut()}>Sign out</button>}
-  </section></main>;
+  return <AuthForm passwordSetup={passwordSetup} resetRequested={resetRequested} email={email} password={password} busy={busy} message={message} canSignOut={!!session}
+    onEmailChange={setEmail} onPasswordChange={setPassword} onSubmit={(event) => void submit(event)}
+    onToggleReset={() => { setResetRequested(!resetRequested); setMessage(""); }} onSignOut={() => void signOut()} />;
 }

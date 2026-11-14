@@ -6,4 +6,10 @@
 .auth-card label { display: grid; gap: 6px; font-weight: 600; }
 .auth-card input { min-height: 44px; padding: 9px 12px; border: 1px solid #9aa6b2; border-radius: 6px; }
 .auth-card .button { min-height: 44px; margin: 4px 8px 4px 0; }
+.auth-card .text-button { min-height: 44px; }
 .auth-card .auth-message { margin: 0; }
+.auth-preview { width: min(100%, 620px); }
+.auth-preview h2 { margin: 24px 0 8px; font-size: 1.15rem; }
+.auth-preview ul { margin: 0 0 16px; padding: 0; list-style: none; }
+.auth-preview li { display: grid; gap: 4px; padding: 12px 0; border-bottom: 1px solid #d8dee6; }
+.auth-preview li span { color: #465465; }

@@ -1,0 +1,10 @@
+{
+    "chat.mcp.serverSampling": {
+        "FWHAYSAPP/.mcp.json: supabase": {
+            "allowedModels": [
+                "copilotcli/auto",
+                "copilot/auto"
+            ]
+        }
+    }
+}

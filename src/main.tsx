@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { registerSW } from "virtual:pwa-register";
 import App from "./App";
+import { AuthPreview } from "./supabase/AuthPreview";
 import ErrorBoundary from "./components/ErrorBoundary";
 import "./styles.css";
 
@@ -34,7 +35,7 @@ registerSW({
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <ErrorBoundary>
-      <App />
+      {import.meta.env.VITE_SUPABASE_AUTH_PREVIEW === "true" ? <AuthPreview /> : <App />}
     </ErrorBoundary>
   </StrictMode>,
 );
