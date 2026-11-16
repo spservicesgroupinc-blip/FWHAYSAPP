@@ -1,0 +1,46 @@
+// Run with PGLITE_MODULE pointing to an installed @electric-sql/pglite module,
+// or install it in the test environment. No hosted service or credentials used.
+const { PGlite } = require(process.env.PGLITE_MODULE || '@electric-sql/pglite');
+const fs = require('node:fs');
+const assert = require('node:assert/strict');
+(async()=>{
+ const db=new PGlite();
+ await db.exec(`create role anon;create role authenticated;create role service_role bypassrls;
+ create schema auth;create table auth.users(id uuid primary key);
+ create function auth.uid() returns uuid language sql as $$select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid$$;
+ grant usage on schema auth to anon,authenticated,service_role;
+ create schema storage;create table storage.buckets(id text primary key,name text,public boolean,file_size_limit bigint);
+ create table storage.objects(bucket_id text,name text);
+ grant usage on schema storage to service_role;grant all on storage.objects to service_role;`);
+ for(const name of ['20261113184722_hays_foundation.sql','20261113184745_protect_save_record.sql','20261116094639_private_file_protocol.sql']) await db.exec(fs.readFileSync('supabase/migrations/'+name,'utf8'));
+ const actor='00000000-0000-0000-0000-000000000123';
+ await db.query('insert into auth.users values($1)',[actor]);
+ await db.query("insert into public.staff_members(user_id,role,active) values($1,'staff',true)",[actor]);
+ await db.exec(`insert into public.requests(id,payload) values('r','{"id":"r","status":"submitted","attachments":[{"driveFileId":"drive1"}]}');`);
+ await db.exec('set role service_role');
+ const identity={parentType:'request',parentId:'r',fileId:'f',kind:'document',name:'test.pdf',size:6,sha256:'a'.repeat(64),mimeType:'application/pdf',mutationId:'m'};
+ const call=async(action,ident=null,ticket=null)=> (await db.query('select public.file_service($1,$2,$3::jsonb,$4) as value',[actor,action,ident?JSON.stringify(ident):null,ticket])).rows[0].value;
+ const reject=async(fn,code)=>{try{await fn();assert.fail('Unexpected success');}catch(e){assert.equal(e.code,code);}};
+ const first=await call('reserve',identity);assert.equal(first.complete,false);
+ assert.equal((await call('reserve',identity)).ticket,first.ticket);
+ await reject(()=>call('reserve',{...identity,size:7}),'22023');
+ await reject(()=>call('finalize',null,first.ticket),'P0002');
+ await db.query("insert into storage.objects values('hays-private',$1)",[first.object_path]);
+ assert.equal((await call('finalize',null,first.ticket)).complete,true);
+ assert.equal((await call('download',null,first.ticket)).ticket,first.ticket);
+ await db.exec('reset role;set role authenticated');
+ await reject(()=>call('download',null,first.ticket),'42501');
+ await reject(()=>db.query('select * from public.private_files'),'42501');
+ await db.exec('reset role');
+ await db.query('update public.staff_members set active=false where user_id=$1',[actor]);
+ await db.exec('set role service_role');
+ await reject(()=>call('download',null,first.ticket),'42501');
+ await db.exec('reset role;update public.staff_members set active=true');
+ await db.exec(`insert into public.migration_files values('drive1','hays-private','migration/hash/content','${'b'.repeat(64)}',6,'application/pdf');set role service_role`);
+ const legacy=async id=>db.query("select public.legacy_file_service($1,'request','r',$2)",[actor,id]);
+ await legacy('drive1');await reject(()=>legacy('unlinked'),'42501');
+ await db.exec(`reset role;update public.requests set payload=payload||'{"status":"completed"}'::jsonb;set role service_role;`);
+ await reject(()=>call('upload',null,first.ticket),'42501');
+ await call('download',null,first.ticket);
+ await db.close();console.log('Private file SQL tests passed: reserve, replay, collisions, missing object, finalize, download, browser denial, revocation, legacy links, completed read-only');
+})().catch(error=>{console.error(error);process.exitCode=1});

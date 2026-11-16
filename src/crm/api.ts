@@ -1,64 +1,54 @@
-import { API_URL, ApiError, enqueueRemoteRequest } from "../services/storage";
+import { getSupabaseClient } from "../supabase/client";
+import { saveSupabaseRecord, SupabaseRecordError } from "../supabase/records";
+import { appendSupabaseActivity } from "../supabase/activities";
 import type { Activity, Customer, CustomerSummary, Task } from "./types";
 
-/** All CRM actions use CORS-simple POSTs; an HTTP 200 alone is not success. */
-export async function crmApi<T>(
-  action: string,
-  payload: Record<string, unknown> = {},
-): Promise<T> {
-  return enqueueRemoteRequest(async () => {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 60000);
-    try {
-      const response = await fetch(API_URL, {
-        method: "POST",
-        redirect: "follow",
-        headers: { "Content-Type": "text/plain;charset=utf-8" },
-        body: JSON.stringify({ action, ...payload }),
-        signal: controller.signal,
-      });
-      const raw = await response.text();
-      let data;
-      try {
-        data = JSON.parse(raw);
-      } catch {
-        throw new ApiError(
-          "The customer service did not return JSON. Check its Apps Script deployment.",
-          "BAD_RESPONSE",
-        );
-      }
-      if (!response.ok || data.ok !== true) {
-        const unknown = /unknown action/i.test(data.error || "");
-        throw new ApiError(
-          unknown
-            ? "Customers requires the updated Apps Script backend. Your device copy is safe; deploy the new Code.gs and retry."
-            : data.error || "The customer service is unavailable.",
-          unknown ? "DEPLOYMENT_REQUIRED" : data.code,
-          data.currentRevision,
-        );
-      }
-      return data as T;
-    } catch (error) {
-      if (controller.signal.aborted)
-        throw new ApiError(
-          "The customer service timed out. Your device changes are still saved; retry synchronization.",
-          "TIMEOUT",
-        );
-      throw error;
-    } finally {
-      clearTimeout(timer);
-    }
-  });
+/** All CRM actions now go through Supabase. */
+async function getClient() {
+  let client: ReturnType<typeof getSupabaseClient> | null = null;
+  try {
+    client = getSupabaseClient();
+  } catch {
+    client = null;
+  }
+  if (!client) throw new Error("Supabase not configured");
+  return client;
 }
 
 export async function listCustomers(): Promise<CustomerSummary[]> {
-  const result = await crmApi<{ customers: CustomerSummary[] }>("listCustomers");
-  return Array.isArray(result.customers) ? result.customers : [];
+  const client = await getClient();
+  const { data, error } = await client
+    .from("customers")
+    .select("id, payload, revision, updated_at")
+    .order("updated_at", { ascending: false });
+  if (error) throw new Error(error.message);
+  return (data || []).map(row => ({
+    id: row.id,
+    revision: row.revision,
+    createdAt: row.payload.createdAt,
+    updatedAt: row.updated_at,
+    name: row.payload.name,
+    phone: row.payload.phone,
+    email: row.payload.email,
+    address: row.payload.address,
+    cityStateZip: row.payload.cityStateZip,
+    tags: row.payload.tags,
+    mergedFromIds: row.payload.mergedFromIds,
+    jobCount: 0,
+    openTaskCount: 0,
+  }));
 }
 
 export async function openCustomer(customerId: string): Promise<Customer | null> {
-  const result = await crmApi<{ customer?: Customer }>("openCustomer", { customerId });
-  return result.customer ?? null;
+  const client = await getClient();
+  const { data, error } = await client
+    .from("customers")
+    .select("id, payload, revision")
+    .eq("id", customerId)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!data) return null;
+  return { ...data.payload, id: data.id, revision: data.revision } as Customer;
 }
 
 export async function saveCustomer(
@@ -66,38 +56,55 @@ export async function saveCustomer(
   expectedRevision: number,
   mutationId: string,
 ): Promise<Customer> {
-  const result = await crmApi<{ customer: Customer }>("saveCustomer", {
-    customer,
-    expectedRevision,
-    mutationId,
-  });
-  return result.customer;
+  const client = await getClient();
+  const saved = await saveSupabaseRecord(client, "customers", customer, expectedRevision, mutationId);
+  return saved as Customer;
 }
 
 export async function mergeCustomers(
   targetId: string,
   sourceId: string,
 ): Promise<Customer> {
-  const result = await crmApi<{ customer: Customer }>("mergeCustomers", {
-    targetId,
-    sourceId,
-  });
-  return result.customer;
+  const client = await getClient();
+  const source = await openCustomer(sourceId);
+  if (!source) throw new Error("Source customer not found");
+  const target = await openCustomer(targetId);
+  if (!target) throw new Error("Target customer not found");
+  const merged: Customer = {
+    ...target,
+    mergedFromIds: [...(target.mergedFromIds || []), sourceId],
+    revision: target.revision + 1,
+  };
+  const saved = await saveSupabaseRecord(client, "customers", merged, merged.revision - 1, crypto.randomUUID());
+  return saved as Customer;
 }
 
 export async function listActivities(customerId: string): Promise<Activity[]> {
-  const result = await crmApi<{ activities: Activity[] }>("listActivities", { customerId });
-  return Array.isArray(result.activities) ? result.activities : [];
+  const client = await getClient();
+  const { data, error } = await client
+    .from("customer_activities")
+    .select("id, payload")
+    .eq("payload->>customerId", customerId)
+    .order("payload->>at", { ascending: false });
+  if (error) throw new Error(error.message);
+  return (data || []).map(row => row.payload as Activity);
 }
 
 export async function addActivity(activity: Activity, mutationId: string): Promise<Activity> {
-  const result = await crmApi<{ activity: Activity }>("addActivity", { activity, mutationId });
-  return result.activity;
+  const client = await getClient();
+  const saved = await appendSupabaseActivity(client, activity, mutationId);
+  return saved;
 }
 
 export async function listTasks(customerId: string): Promise<Task[]> {
-  const result = await crmApi<{ tasks: Task[] }>("listTasks", { customerId });
-  return Array.isArray(result.tasks) ? result.tasks : [];
+  const client = await getClient();
+  const { data, error } = await client
+    .from("tasks")
+    .select("id, payload")
+    .eq("payload->>customerId", customerId)
+    .order("payload->>dueDate", { ascending: true });
+  if (error) throw new Error(error.message);
+  return (data || []).map(row => row.payload as Task);
 }
 
 export async function saveTask(
@@ -105,10 +112,7 @@ export async function saveTask(
   expectedRevision: number,
   mutationId: string,
 ): Promise<Task> {
-  const result = await crmApi<{ task: Task }>("saveTask", {
-    task,
-    expectedRevision,
-    mutationId,
-  });
-  return result.task;
+  const client = await getClient();
+  const saved = await saveSupabaseRecord(client, "tasks", task, expectedRevision, mutationId);
+  return saved as Task;
 }

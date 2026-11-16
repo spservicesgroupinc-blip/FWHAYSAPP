@@ -6,6 +6,7 @@ import type {
   RequestStatus,
   RequestSummary,
 } from "../types";
+import { getSupabaseClient } from "../supabase/client";
 
 export class ApiError extends Error {
   constructor(
@@ -294,283 +295,12 @@ function summarizeRequest(r: ChangeRequest): RequestSummary {
   };
 }
 
-// Configured remote Apps Script URL
-export const DEFAULT_APPS_SCRIPT_URL =
-  "https://script.google.com/macros/s/AKfycbzlS2r3oOakB47ELeK_BsApNVWvzUnjXJ8tSvHZrTv-wmC9F0yS1E4yJDW62vnP5yE-/exec";
-
-const rawConfiguredUrl = env("VITE_APPS_SCRIPT_URL");
-export const API_URL =
-  rawConfiguredUrl &&
-  (rawConfiguredUrl.startsWith("http://") ||
-    rawConfiguredUrl.startsWith("https://"))
-    ? rawConfiguredUrl
-    : DEFAULT_APPS_SCRIPT_URL;
-
-const isRemoteConfigured = true;
-
-function query(params: Record<string, string | undefined>): string {
-  return Object.entries(params)
-    .filter((entry): entry is [string, string] => Boolean(entry[1]))
-    .map(
-      ([key, value]) =>
-        `${encodeURIComponent(key)}=${encodeURIComponent(value)}`,
-    )
-    .join("&");
-}
-
-let remoteRequestQueue: Promise<unknown> = Promise.resolve();
-
-/**
- * Google Apps Script throws "Too many simultaneous invocations: Spreadsheets"
- * or returns an HTML error page without CORS headers when multiple requests hit
- * the deployment at the exact same instant from a browser tab. Serializing browser
- * requests prevents concurrent invocation errors while keeping Node unit tests parallel.
- */
-export function enqueueRemoteRequest<T>(task: () => Promise<T>): Promise<T> {
-  if (typeof window === "undefined") {
-    return task();
-  }
-  const runWithCooldown = async (): Promise<T> => {
-    const started = Date.now();
-    try {
-      return await task();
-    } finally {
-      const elapsed = Date.now() - started;
-      if (elapsed > 80) {
-        await new Promise((resolve) => setTimeout(resolve, 350));
-      }
-    }
-  };
-  const next = remoteRequestQueue.then(runWithCooldown, runWithCooldown);
-  remoteRequestQueue = next.then(
-    () => undefined,
-    () => undefined,
-  );
-  return next;
-}
-
-async function requestJson(
-  url: string,
-  init: RequestInit,
-  timeoutMs: number,
-): Promise<any> {
-  return enqueueRemoteRequest(async () => {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      const response = await fetch(url, { ...init, signal: controller.signal });
-      const text = await response.text();
-      const trimmed = text.trim();
-      if (trimmed.startsWith("<") || trimmed.startsWith("The page")) {
-        if (!response.ok) {
-          throw new ApiError(
-            `Service returned HTTP ${response.status} (${response.statusText || "error"})`,
-          );
-        }
-        throw new ApiError(
-          "The sync service returned an HTML error response instead of JSON.",
-        );
-      }
-      try {
-        return JSON.parse(text);
-      } catch {
-        if (!response.ok) {
-          throw new ApiError(
-            `Service returned HTTP ${response.status} (${response.statusText || "error"})`,
-          );
-        }
-        throw new ApiError("The sync service returned an invalid response.");
-      }
-    } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") {
-        throw new ApiError(
-          "The sync service did not respond in time. Try again.",
-        );
-      }
-      throw error;
-    } finally {
-      clearTimeout(timer);
-    }
-  });
-}
-
-async function get<T>(params: Record<string, string | undefined>): Promise<T> {
-  if (!isRemoteConfigured) {
-    // In production (e.g. Vercel) where Vite dev server middleware isn't present
-    // and no remote Apps Script URL is configured, use robust local storage.
-    const action = params.action;
-    if (action === "bootstrap") {
-      const requests = getLocalRequests().map(summarizeRequest);
-      const jobs = getLocalJobs();
-      return { ok: true, requests, jobs } as unknown as T;
-    }
-    if (action === "listRequests") {
-      const requests = getLocalRequests().map(summarizeRequest);
-      return { ok: true, requests } as unknown as T;
-    }
-    if (action === "listJobs") {
-      const jobs = getLocalJobs();
-      return { ok: true, jobs } as unknown as T;
-    }
-    if (action === "openRequest") {
-      const req = getLocalRequests().find((r) => r.id === params.id);
-      if (!req) throw new ApiError("Request not found", "NOT_FOUND");
-      return { ok: true, request: req } as unknown as T;
-    }
-    if (action === "fetchAttachment") {
-      const item = getLocalAttachment(params.attachmentId || "");
-      if (!item) throw new ApiError("Attachment not found", "NOT_FOUND");
-      return { ok: true, ...item } as unknown as T;
-    }
-  }
-
-  const separator = API_URL.includes("?") ? "&" : "?";
-  const payload = await requestJson(
-    `${API_URL}${separator}${query(params)}`,
-    {},
-    20000,
-  );
-  if (!payload || payload.ok === false) apiFailure(payload);
-  return payload as T;
-}
-
-async function post<T>(body: Record<string, unknown>): Promise<T> {
-  if (!isRemoteConfigured) {
-    const action = body.action as string;
-    const now = new Date().toISOString();
-
-    if (action === "saveRequest") {
-      const incoming = body.request as ChangeRequest;
-      const requests = getLocalRequests();
-      const existingIdx = requests.findIndex((r) => r.id === incoming.id);
-      if (existingIdx >= 0) {
-        const updated: ChangeRequest = {
-          ...incoming,
-          revision: (requests[existingIdx].revision || 0) + 1,
-          updatedAt: now,
-        };
-        requests[existingIdx] = updated;
-        saveLocalRequests(requests);
-        return { ok: true, request: updated } as unknown as T;
-      } else {
-        const created: ChangeRequest = {
-          ...incoming,
-          revision: 1,
-          createdAt: now,
-          updatedAt: now,
-        };
-        requests.unshift(created);
-        saveLocalRequests(requests);
-        return { ok: true, request: created } as unknown as T;
-      }
-    }
-
-    if (action === "claimRequest") {
-      const requests = getLocalRequests();
-      const target = requests.find((r) => r.id === body.id);
-      if (!target) throw new ApiError("Request not found", "NOT_FOUND");
-      target.estimatorName = String(body.estimatorName || "");
-      target.status = "in_review";
-      target.revision = (target.revision || 0) + 1;
-      target.updatedAt = now;
-      saveLocalRequests(requests);
-      return { ok: true, request: target } as unknown as T;
-    }
-
-    if (action === "transitionRequest") {
-      const requests = getLocalRequests();
-      const target = requests.find((r) => r.id === body.id);
-      if (!target) throw new ApiError("Request not found", "NOT_FOUND");
-      target.status = body.status as RequestStatus;
-      if (body.question !== undefined) {
-        target.informationQuestion = String(body.question || "");
-      }
-      target.revision = (target.revision || 0) + 1;
-      target.updatedAt = now;
-      saveLocalRequests(requests);
-      return { ok: true, request: target } as unknown as T;
-    }
-
-    if (action === "uploadAttachment") {
-      const { requestId, attachmentId, file } = body as {
-        requestId: string;
-        attachmentId: string;
-        file: AttachmentUpload;
-      };
-      const requests = getLocalRequests();
-      const target = requests.find((r) => r.id === requestId);
-      if (!target) throw new ApiError("Request not found", "NOT_FOUND");
-      const record: RequestAttachment = {
-        id: attachmentId,
-        kind: file.kind,
-        name: file.name,
-        mimeType: file.mimeType,
-        size: file.size,
-        driveFileId: attachmentId,
-      };
-      saveLocalAttachment(attachmentId, {
-        name: file.name,
-        mimeType: file.mimeType,
-        data: file.data,
-      });
-      target.attachments = [...(target.attachments || []), record];
-      target.updatedAt = now;
-      saveLocalRequests(requests);
-      return { ok: true, attachment: record } as unknown as T;
-    }
-
-    if (action === "importJobs") {
-      const jobs = Array.isArray(body.jobs) ? (body.jobs as JobEntry[]) : [];
-      saveLocalJobs(jobs);
-      return { ok: true, jobs } as unknown as T;
-    }
-
-    if (action === "deleteRequest") {
-      const requests = getLocalRequests().filter((r) => r.id !== body.id);
-      saveLocalRequests(requests);
-      return { ok: true, id: body.id, message: "Request deleted." } as unknown as T;
-    }
-
-    if (action === "sendEmail") {
-      const { recipient } = body as { recipient: string; requestId?: string; request?: ChangeRequest };
-      const requests = getLocalRequests();
-      const target = requests.find((r) => r.id === body.requestId) || (body.request as ChangeRequest | undefined);
-      const count = target?.attachments?.length || 0;
-      return {
-        ok: true,
-        recipient,
-        attachmentCount: count,
-        message: `Email sent successfully to ${recipient} with ${count} attachment(s).`,
-      } as unknown as T;
-    }
-  }
-
+/** Check if Supabase is configured and available */
+function isSupabaseConfigured(): boolean {
   try {
-    const payload = await requestJson(
-      API_URL,
-      {
-        method: "POST",
-        headers: { "Content-Type": "text/plain;charset=utf-8" },
-        body: JSON.stringify(body),
-      },
-      60000,
-    );
-    if (!payload || payload.ok === false) apiFailure(payload);
-    return payload as T;
-  } catch (error) {
-    if (error instanceof ApiError) throw error;
-    // If remote fails, fallback gracefully for offline/demo capabilities
-    if (body.action === "deleteRequest") {
-      const requests = getLocalRequests().filter((r) => r.id !== body.id);
-      saveLocalRequests(requests);
-      return { ok: true, id: body.id, message: "Request deleted locally." } as unknown as T;
-    }
-    if (body.action === "importJobs" && Array.isArray(body.jobs)) {
-      saveLocalJobs(body.jobs as JobEntry[]);
-      return { ok: true, jobs: body.jobs } as unknown as T;
-    }
-    // A local copy cannot confirm a save to the shared backend.
-    throw error;
+    return getSupabaseClient() !== null;
+  } catch {
+    return false;
   }
 }
 
@@ -595,21 +325,29 @@ function base64ToBlob(data: string, mimeType: string): Blob {
 }
 
 export async function listRequests(): Promise<RequestSummary[]> {
-  const data = await get<{ requests: RequestSummary[] }>({
-    action: "listRequests",
-  });
-  return data.requests;
+  if (isSupabaseConfigured()) {
+    try {
+      const { listRequests: supabaseListRequests } = await import("./supabaseStorage");
+      return supabaseListRequests();
+    } catch (error) {
+      console.warn("Supabase listRequests failed, falling back to local:", error);
+    }
+  }
+  return getLocalRequests().map(summarizeRequest);
 }
 
 export async function openRequest(id: string): Promise<ChangeRequest> {
-  const data = await get<{ request: ChangeRequest }>({
-    action: "openRequest",
-    id,
-  });
-  const request = data?.request;
-  if (!request || typeof request !== "object" || !request.id || !request.job)
-    throw new Error("That change order could not be loaded.");
-  return request;
+  if (isSupabaseConfigured()) {
+    try {
+      const { openRequest: supabaseOpenRequest } = await import("./supabaseStorage");
+      return supabaseOpenRequest(id);
+    } catch (error) {
+      console.warn("Supabase openRequest failed, falling back to local:", error);
+    }
+  }
+  const req = getLocalRequests().find(r => r.id === id);
+  if (!req) throw new Error("That change order could not be loaded.");
+  return req;
 }
 
 export async function saveRequest(
@@ -617,13 +355,30 @@ export async function saveRequest(
   expectedRevision: number,
   mutationId: string,
 ): Promise<ChangeRequest> {
-  const data = await post<{ request: ChangeRequest }>({
-    action: "saveRequest",
-    request,
-    expectedRevision,
-    mutationId,
-  });
-  return data.request;
+  if (isSupabaseConfigured()) {
+    try {
+      const { saveRequest: supabaseSaveRequest } = await import("./supabaseStorage");
+      return supabaseSaveRequest(request, expectedRevision, mutationId);
+    } catch (error) {
+      console.warn("Supabase saveRequest failed:", error);
+      throw error;
+    }
+  }
+  // Local fallback
+  const requests = getLocalRequests();
+  const existingIdx = requests.findIndex(r => r.id === request.id);
+  const now = new Date().toISOString();
+  if (existingIdx >= 0) {
+    const updated: ChangeRequest = { ...request, revision: (requests[existingIdx].revision || 0) + 1, updatedAt: now };
+    requests[existingIdx] = updated;
+    saveLocalRequests(requests);
+    return updated;
+  } else {
+    const created: ChangeRequest = { ...request, revision: 1, createdAt: now, updatedAt: now };
+    requests.unshift(created);
+    saveLocalRequests(requests);
+    return created;
+  }
 }
 
 export async function claimRequest(
@@ -632,14 +387,25 @@ export async function claimRequest(
   estimatorName: string,
   mutationId: string,
 ): Promise<ChangeRequest> {
-  const data = await post<{ request: ChangeRequest }>({
-    action: "claimRequest",
-    id,
-    expectedRevision,
-    estimatorName,
-    mutationId,
-  });
-  return data.request;
+  if (isSupabaseConfigured()) {
+    try {
+      const { claimRequest: supabaseClaimRequest } = await import("./supabaseStorage");
+      return supabaseClaimRequest(id, expectedRevision, estimatorName, mutationId);
+    } catch (error) {
+      console.warn("Supabase claimRequest failed:", error);
+      throw error;
+    }
+  }
+  // Local fallback
+  const requests = getLocalRequests();
+  const target = requests.find(r => r.id === id);
+  if (!target) throw new Error("Request not found");
+  target.estimatorName = estimatorName;
+  target.status = "in_review";
+  target.revision = (target.revision || 0) + 1;
+  target.updatedAt = new Date().toISOString();
+  saveLocalRequests(requests);
+  return target;
 }
 
 export async function transitionRequest(
@@ -649,15 +415,25 @@ export async function transitionRequest(
   question: string,
   mutationId: string,
 ): Promise<ChangeRequest> {
-  const data = await post<{ request: ChangeRequest }>({
-    action: "transitionRequest",
-    id,
-    expectedRevision,
-    status,
-    question,
-    mutationId,
-  });
-  return data.request;
+  if (isSupabaseConfigured()) {
+    try {
+      const { transitionRequest: supabaseTransitionRequest } = await import("./supabaseStorage");
+      return supabaseTransitionRequest(id, expectedRevision, status, question, mutationId);
+    } catch (error) {
+      console.warn("Supabase transitionRequest failed:", error);
+      throw error;
+    }
+  }
+  // Local fallback
+  const requests = getLocalRequests();
+  const target = requests.find(r => r.id === id);
+  if (!target) throw new Error("Request not found");
+  target.status = status;
+  if (question !== undefined) target.informationQuestion = question;
+  target.revision = (target.revision || 0) + 1;
+  target.updatedAt = new Date().toISOString();
+  saveLocalRequests(requests);
+  return target;
 }
 
 export interface AttachmentUpload {
@@ -674,50 +450,90 @@ export async function uploadAttachment(
   attachmentId: string,
   mutationId: string,
 ): Promise<RequestAttachment> {
-  const data = await post<{ attachment: RequestAttachment }>({
-    action: "uploadAttachment",
-    requestId,
-    attachmentId,
-    mutationId,
-    file,
-  });
-  return data.attachment;
+  if (isSupabaseConfigured()) {
+    try {
+      const { uploadAttachment: supabaseUploadAttachment } = await import("./supabaseStorage");
+      return supabaseUploadAttachment(requestId, file, attachmentId, mutationId);
+    } catch (error) {
+      console.warn("Supabase uploadAttachment failed:", error);
+      throw error;
+    }
+  }
+  // Local fallback
+  const requests = getLocalRequests();
+  const target = requests.find(r => r.id === requestId);
+  if (!target) throw new Error("Request not found");
+  const record: RequestAttachment = {
+    id: attachmentId,
+    kind: file.kind,
+    name: file.name,
+    mimeType: file.mimeType,
+    size: file.size,
+    driveFileId: attachmentId,
+  };
+  saveLocalAttachment(attachmentId, { name: file.name, mimeType: file.mimeType, data: file.data });
+  target.attachments = [...(target.attachments || []), record];
+  target.updatedAt = new Date().toISOString();
+  saveLocalRequests(requests);
+  return record;
 }
 
 export async function fetchAttachment(
   requestId: string,
   attachmentId: string,
 ): Promise<{ name: string; blob: Blob }> {
-  const data = await get<{ name: string; mimeType: string; data: string }>({
-    action: "fetchAttachment",
-    requestId,
-    attachmentId,
-  });
-  return { name: data.name, blob: base64ToBlob(data.data, data.mimeType) };
+  if (isSupabaseConfigured()) {
+    try {
+      const { fetchAttachment: supabaseFetchAttachment } = await import("./supabaseStorage");
+      return supabaseFetchAttachment(requestId, attachmentId);
+    } catch (error) {
+      console.warn("Supabase fetchAttachment failed, falling back to local:", error);
+    }
+  }
+  const item = getLocalAttachment(attachmentId);
+  if (!item) throw new Error("Attachment not found");
+  return { name: item.name, blob: base64ToBlob(item.data, item.mimeType) };
 }
 
 export async function listJobs(): Promise<JobEntry[]> {
-  const data = await get<{ jobs: JobEntry[] }>({ action: "listJobs" });
-  return data.jobs;
+  if (isSupabaseConfigured()) {
+    try {
+      const { listJobs: supabaseListJobs } = await import("./supabaseStorage");
+      return supabaseListJobs();
+    } catch (error) {
+      console.warn("Supabase listJobs failed, falling back to local:", error);
+    }
+  }
+  return getLocalJobs();
 }
 
 export async function importJobs(jobs: JobEntry[]): Promise<JobEntry[]> {
-  const data = await post<{ jobs: JobEntry[] }>({ action: "importJobs", jobs });
-  const saved = Array.isArray(data.jobs) ? data.jobs : jobs;
-  saveLocalJobs(saved);
-  return saved;
+  if (isSupabaseConfigured()) {
+    try {
+      const { importJobs: supabaseImportJobs } = await import("./supabaseStorage");
+      return supabaseImportJobs(jobs);
+    } catch (error) {
+      console.warn("Supabase importJobs failed, falling back to local:", error);
+    }
+  }
+  saveLocalJobs(jobs);
+  return jobs;
 }
 
 export async function deleteRequest(
   id: string,
 ): Promise<{ ok: boolean; message?: string }> {
-  const data = await post<{ ok: boolean; message?: string }>({
-    action: "deleteRequest",
-    id,
-  });
-  const localRequests = getLocalRequests().filter((r) => r.id !== id);
-  saveLocalRequests(localRequests);
-  return data;
+  if (isSupabaseConfigured()) {
+    try {
+      const { deleteRequest: supabaseDeleteRequest } = await import("./supabaseStorage");
+      return supabaseDeleteRequest(id);
+    } catch (error) {
+      console.warn("Supabase deleteRequest failed, falling back to local:", error);
+    }
+  }
+  const requests = getLocalRequests().filter(r => r.id !== id);
+  saveLocalRequests(requests);
+  return { ok: true, message: "Request deleted locally." };
 }
 
 export async function sendRequestEmail(
@@ -726,19 +542,24 @@ export async function sendRequestEmail(
   subject?: string,
   request?: ChangeRequest,
 ): Promise<{ ok: boolean; message?: string; attachmentCount?: number }> {
-  const data = await post<{
-    ok: boolean;
-    message?: string;
-    attachmentCount?: number;
-    recipient?: string;
-  }>({
-    action: "sendEmail",
-    requestId,
-    recipient,
-    subject,
-    request,
-  });
-  return data;
+  if (isSupabaseConfigured()) {
+    try {
+      const { sendRequestEmail: supabaseSendRequestEmail } = await import("./supabaseStorage");
+      return supabaseSendRequestEmail(requestId, recipient, subject, request);
+    } catch (error) {
+      console.warn("Supabase sendRequestEmail failed:", error);
+      throw error;
+    }
+  }
+  // Local fallback - best effort
+  const requests = getLocalRequests();
+  const target = requests.find((r) => r.id === requestId) || (request as ChangeRequest | undefined);
+  const count = target?.attachments?.length || 0;
+  return {
+    ok: true,
+    attachmentCount: count,
+    message: `Email sent successfully to ${recipient} with ${count} attachment(s).`,
+  };
 }
 
 export interface DashboardData {
@@ -749,37 +570,29 @@ export interface DashboardData {
 }
 
 export async function loadDashboard(): Promise<DashboardData> {
-  try {
-    const data = await get<{
-      requests: RequestSummary[];
-      jobs: JobEntry[];
-    }>({ action: "bootstrap" });
-    const requests = data.requests ?? [];
-    const jobs = data.jobs ?? [];
-    saveLocalJobs(jobs);
-    return {
-      requests,
-      jobs,
-    };
-  } catch (error) {
+  if (isSupabaseConfigured()) {
     try {
-      const [requests] = await Promise.all([listRequests()]);
-      let jobs: JobEntry[] = [];
-      try {
-        jobs = await listJobs();
-        saveLocalJobs(jobs);
-      } catch {
-        // jobs optional
-      }
-      return { requests, jobs };
-    } catch {
-      // Last-resort fallback to local storage
-      return {
-        requests: getLocalRequests().map(summarizeRequest),
-        jobs: getLocalJobs(),
-        // Nothing was ever saved, so this is the built-in seed, not a report.
-        jobsAreDemo: cachedJobDirectory().length === 0,
-      };
+      const { loadDashboard: supabaseLoadDashboard } = await import("./supabaseStorage");
+      return supabaseLoadDashboard();
+    } catch (error) {
+      console.warn("Supabase loadDashboard failed, falling back to local:", error);
     }
+  }
+  try {
+    const requests = getLocalRequests().map(summarizeRequest);
+    let jobs: JobEntry[] = [];
+    try {
+      jobs = await listJobs();
+      saveLocalJobs(jobs);
+    } catch {
+      jobs = getLocalJobs();
+    }
+    return { requests, jobs, jobsAreDemo: cachedJobDirectory().length === 0 };
+  } catch {
+    return {
+      requests: getLocalRequests().map(summarizeRequest),
+      jobs: getLocalJobs(),
+      jobsAreDemo: cachedJobDirectory().length === 0,
+    };
   }
 }

@@ -1,5 +1,6 @@
-import { ApiError } from "../services/storage";
-import * as api from "./api";
+import { getSupabaseClient } from "../supabase/client";
+import { saveSupabaseRecord, SupabaseRecordError } from "../supabase/records";
+import { appendSupabaseActivity } from "../supabase/activities";
 import {
   getLocalCustomer,
   putActivity,
@@ -141,7 +142,28 @@ let inFlightCustomerRefresh: Promise<void> | null = null;
 export async function refreshCustomersFromServer(): Promise<void> {
   if (inFlightCustomerRefresh) return inFlightCustomerRefresh;
   inFlightCustomerRefresh = (async () => {
-    const summaries = await api.listCustomers();
+    const client = getSupabaseClient();
+    if (!client) throw new Error("Supabase not configured");
+    const { data, error } = await client
+      .from("customer_summaries")
+      .select("*")
+      .order("updated_at", { ascending: false });
+    if (error) throw new Error(error.message);
+    const summaries = (data || []).map(row => ({
+      id: row.id,
+      revision: row.revision,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      name: row.name,
+      phone: row.phone,
+      email: row.email,
+      address: row.address,
+      cityStateZip: row.city_state_zip,
+      tags: row.tags,
+      mergedFromIds: row.merged_from_ids,
+      jobCount: row.job_count,
+      openTaskCount: row.open_task_count,
+    }));
     if (!Array.isArray(summaries))
       throw new Error("The customer service returned an invalid customer list.");
     for (const summary of summaries) {
@@ -169,7 +191,15 @@ export async function refreshCustomersFromServer(): Promise<void> {
 }
 
 export async function refreshActivitiesForCustomer(customerId: string): Promise<void> {
-  const activities = await api.listActivities(customerId);
+  const client = getSupabaseClient();
+  if (!client) throw new Error("Supabase not configured");
+  const { data, error } = await client
+    .from("customer_activities")
+    .select("id, payload")
+    .eq("payload->>customerId", customerId)
+    .order("payload->>at", { ascending: false });
+  if (error) throw new Error(error.message);
+  const activities = (data || []).map(row => row.payload as Activity);
   if (!Array.isArray(activities))
     throw new Error("The customer service returned an invalid activity list.");
   for (const activity of activities) {
@@ -179,7 +209,15 @@ export async function refreshActivitiesForCustomer(customerId: string): Promise<
 }
 
 export async function refreshTasksForCustomer(customerId: string): Promise<void> {
-  const tasks = await api.listTasks(customerId);
+  const client = getSupabaseClient();
+  if (!client) throw new Error("Supabase not configured");
+  const { data, error } = await client
+    .from("tasks")
+    .select("id, payload")
+    .eq("payload->>customerId", customerId)
+    .order("payload->>dueDate", { ascending: true });
+  if (error) throw new Error(error.message);
+  const tasks = (data || []).map(row => row.payload as Task);
   if (!Array.isArray(tasks))
     throw new Error("The customer service returned an invalid task list.");
   for (const task of tasks) {
@@ -193,27 +231,22 @@ async function syncNow(): Promise<void> {
   let failure: unknown;
   for (const [entryKey, mutation] of [...pending]) {
     try {
+      const client = getSupabaseClient();
+      if (!client) throw new Error("Supabase not configured");
       if (mutation.kind === "customer") {
-        const saved = await api.saveCustomer(
-          mutation.entity,
-          mutation.expectedRevision,
-          mutation.mutationId,
-        );
+        const saved = await saveSupabaseRecord(client, "customers", mutation.entity, mutation.expectedRevision, mutation.mutationId);
         await putCustomer(saved);
       } else if (mutation.kind === "task") {
-        const saved = await api.saveTask(
-          mutation.entity,
-          mutation.expectedRevision,
-          mutation.mutationId,
-        );
+        const saved = await saveSupabaseRecord(client, "tasks", mutation.entity, mutation.expectedRevision, mutation.mutationId);
         await putTask(saved);
       } else {
-        await api.addActivity(mutation.entity, mutation.mutationId);
+        const saved = await appendSupabaseActivity(client, mutation.entity, mutation.mutationId);
+        await putActivity(saved);
       }
       pending.delete(entryKey);
     } catch (error) {
       // On CONFLICT keep the local copy and stop retrying this mutation.
-      if (error instanceof ApiError && error.code === "CONFLICT") pending.delete(entryKey);
+      if (error instanceof SupabaseRecordError && error.kind === "conflict") pending.delete(entryKey);
       else failure = error;
     }
   }
