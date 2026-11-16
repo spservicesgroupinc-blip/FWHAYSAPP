@@ -84,6 +84,8 @@ import {
   lookupTargetFromRequest,
   type CustomerLookupTarget,
 } from "./crm";
+import { SupabaseAuthGate } from "./supabase/SupabaseAuthGate";
+import { showAuthPreview } from "./supabase/authRoute";
 import { CUSTOMER_REFERENCE_CHANGED, getCachedCustomerReference, getCustomerReference } from "./documents/services/customerReferenceService";
 import type { CustomerReferenceSnapshot } from "./documents/services/customerReference";
 import { customerReferenceJobs } from "./services/customerReferenceJobs";
@@ -1203,5 +1205,13 @@ export default function App() {
         }}
       />
     </div>
+  );
+}
+
+export function SupabaseApp() {
+  return (
+    <SupabaseAuthGate>
+      {(role) => <App />}
+    </SupabaseAuthGate>
   );
 }

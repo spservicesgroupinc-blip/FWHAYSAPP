@@ -6,18 +6,20 @@ import { authRedirectUrl } from "./authRoute";
 import "./auth.css";
 
 type Membership = "checking" | "allowed" | "denied" | "error";
-
-// Capture invitation links before the SDK consumes and clears the URL fragment.
-const initialLinkType = typeof window === "undefined" ? null
-  : new URLSearchParams(window.location.hash.slice(1)).get("type") || new URLSearchParams(window.location.search).get("type");
+type StaffRole = "admin" | "staff" | "estimator" | "project_manager" | null;
 
 /** Opt-in gate; authorization must also be enforced by server RLS and Storage policies. */
-export function SupabaseAuthGate({ children }: { children: ReactNode }) {
+export function SupabaseAuthGate({ children }: { children: ReactNode | ((role: StaffRole) => ReactNode) }) {
+  // Capture invitation links before the SDK consumes and clears the URL fragment.
+  const initialLinkType = typeof window === "undefined" ? null
+    : new URLSearchParams(window.location.hash.slice(1)).get("type") || new URLSearchParams(window.location.search).get("type");
+
   const client = getSupabaseClient();
   const [session, setSession] = useState<Session | null>(null);
   const [initialized, setInitialized] = useState(false);
   const [passwordSetup, setPasswordSetup] = useState(initialLinkType === "invite" || initialLinkType === "recovery");
   const [membership, setMembership] = useState<Membership>("checking");
+  const [staffRole, setStaffRole] = useState<StaffRole>(null);
   const [checkVersion, setCheckVersion] = useState(0);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -46,10 +48,14 @@ export function SupabaseAuthGate({ children }: { children: ReactNode }) {
     let current = true;
     const generation = ++membershipGeneration.current;
     setMembership("checking");
+    setStaffRole(null);
     void client.from("staff_members").select("role,active").eq("user_id", session.user.id).maybeSingle()
       .then(({ data, error }) => {
         if (!current || generation !== membershipGeneration.current) return;
-        setMembership(error ? "error" : data?.active === true && (data.role === "admin" || data.role === "staff") ? "allowed" : "denied");
+        const active = data?.active === true;
+        const role = (data?.role ?? null) as StaffRole;
+        setStaffRole(role);
+        setMembership(error ? "error" : active && (role === "admin" || role === "staff") ? "allowed" : "denied");
       }, () => { if (current && generation === membershipGeneration.current) setMembership("error"); });
     return () => { current = false; };
   }, [client, session, passwordSetup, checkVersion]);
@@ -110,7 +116,7 @@ export function SupabaseAuthGate({ children }: { children: ReactNode }) {
   if (!client) return <main className="auth-page"><section className="auth-card"><h1>Workspace unavailable</h1><p>Staff sign-in is not configured. Contact your administrator.</p></section></main>;
   if (!initialized) return <main className="auth-page"><p role="status">Checking your session…</p></main>;
   if (passwordSetup && !session) return <main className="auth-page"><section className="auth-card"><h1>Link unavailable</h1><p>This invitation or reset link may have expired. Contact your administrator or request another password reset.</p><button className="button primary" onClick={() => { setPasswordSetup(false); setResetRequested(true); }}>Request reset link</button></section></main>;
-  if (session && !passwordSetup && membership === "allowed") return <>{children}</>;
+  if (session && !passwordSetup && membership === "allowed") return <>{typeof children === "function" ? children(staffRole) : children}</>;
   if (session && !passwordSetup) return <main className="auth-page"><section className="auth-card">
     <h1>{membership === "checking" ? "Checking access…" : membership === "denied" ? "Access not available" : "Unable to check access"}</h1>
     <p role={membership === "checking" ? "status" : undefined}>{membership === "checking" ? "Please wait." : membership === "denied" ? "Your account is not approved for this workspace. Contact your administrator." : "Check your connection and try again."}</p>

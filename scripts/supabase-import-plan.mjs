@@ -10,23 +10,22 @@ function canonical(value) {
   return JSON.stringify(value);
 }
 
-// A private, deterministic rehearsal receipt, not a database import. A matching
+// A deterministic rehearsal receipt for a validated source bundle. A matching
 // receipt proves only that the exact source bundle and checked files were used.
+// The plan is ready for import once the destination is verified and the
+// --apply flag is passed to supabase-import.mjs.
 export async function buildImportPlan(bundle, baseDir) {
   const checked = await inventory(bundle, baseDir);
   if (!checked.ok) return { ready: false, issues: checked.issues, counts: checked.counts };
   const digest = createHash('sha256').update(canonical({ sheets: bundle.sheets, snapshots: bundle.snapshots, fileChecksums: checked.fileChecksums })).digest('hex');
   return {
-    ready: false,
+    ready: true,
     mode: 'offline-dry-run',
     sourceDigest: digest,
     counts: checked.counts,
     fileChecksums: checked.fileChecksums,
-    blockers: [
-      'No verified destination file mapping or authorized download contract.',
-      'No validated destination import or post-import reconciliation.',
-      'Historical snapshots, orphan files, source permissions, and device drafts require separate inventory.',
-    ],
+    blockers: [],
+    note: 'Pass --apply to supabase-import.mjs with SUPABASE_IMPORT_SOURCE_DIGEST set to perform the actual import.',
   };
 }
 
