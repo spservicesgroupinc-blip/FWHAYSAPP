@@ -394,17 +394,26 @@ export default defineConfig({
         name: "Hays + Sons Change Orders",
         short_name: "ChangeOrders",
         description:
-          "Quick change order intake and estimator review workflow.",
+          "Quick change order intake, customer & job directory, and production documents.",
         start_url: "/",
         scope: "/",
         display: "standalone",
+        display_override: ["window-controls-overlay", "standalone", "minimal-ui"],
+        orientation: "any",
         background_color: "#ffffff",
         theme_color: "#dc2626",
+        categories: ["business", "productivity", "utilities"],
         shortcuts: [
           {
             name: "Quick request",
             short_name: "Quick request",
             url: "/#/simple",
+            icons: [{ src: "/icons/icon-192.png", sizes: "192x192" }],
+          },
+          {
+            name: "Customers & jobs",
+            short_name: "Customers",
+            url: "/#/customers",
             icons: [{ src: "/icons/icon-192.png", sizes: "192x192" }],
           },
         ],
@@ -450,8 +459,9 @@ export default defineConfig({
         ],
       },
       devOptions: {
-        enabled: false,
+        enabled: true,
         type: "module",
+        suppressWarnings: true,
       },
     }),
   ],

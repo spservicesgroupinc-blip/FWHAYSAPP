@@ -62,6 +62,7 @@ export default function AppHeader({current, onNavigate, back, subtitle, actions,
               <button onClick={() => navigate("jobs")}>Import jobs <small>Upload Dash CSV for customers, jobs & documents</small></button>
               <button onClick={() => navigate("migration")}>Import document jobs <small>Bring existing saved jobs into this app</small></button>
               <button onClick={() => navigate("reference")}>Customer reference CSV <small>Manage the stored reference file</small></button>
+              <button onClick={() => { setToolsOpen(false); window.dispatchEvent(new CustomEvent("hays:open-install-pwa")); }}>Install app <small>Add to Desktop or Smartphone home screen</small></button>
             </nav>}
           </div>
           {current !== "simple" && <button className="button primary desktop-new-request" onClick={() => navigate("simple")}><Plus size={18}/> New request</button>}

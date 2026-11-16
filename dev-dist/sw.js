@@ -67,17 +67,27 @@ if (!self.define) {
     });
   };
 }
-define(['./workbox-844af931'], (function (workbox) { 'use strict';
+define(['./workbox-083e6eab'], (function (workbox) { 'use strict';
 
-	self.skipWaiting();
-	workbox.clientsClaim();
-	workbox.registerRoute(({
-	  request,
-	  url
-	}) => request.mode === "navigate" && url.origin === self.location.origin, new workbox.NetworkFirst({
-	  "cacheName": "hays-app-shell",
-	  "networkTimeoutSeconds": 4,
-	  plugins: []
-	}), 'GET');
+  self.skipWaiting();
+  workbox.clientsClaim();
+  /**
+   * The precacheAndRoute() method efficiently caches and responds to
+   * requests for URLs in the manifest.
+   * See https://goo.gl/S9QRab
+   */
+  workbox.precacheAndRoute([{
+    "url": "suppress-warnings.js",
+    "revision": "d41d8cd98f00b204e9800998ecf8427e"
+  }], {});
+  workbox.cleanupOutdatedCaches();
+  workbox.registerRoute(({
+    request,
+    url
+  }) => request.mode === "navigate" && url.origin === self.location.origin, new workbox.NetworkFirst({
+    "cacheName": "hays-app-shell",
+    "networkTimeoutSeconds": 4,
+    plugins: []
+  }), 'GET');
 
 }));

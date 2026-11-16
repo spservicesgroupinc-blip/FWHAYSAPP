@@ -5,11 +5,22 @@ node_modules/
 
 # Build outputs
 dist/
+dev-dist/
 
 # Tests & Playwright
 tests/
 test-results/
 playwright-report/
+playwright.config.ts
+.playwright-cli/
+
+# Reference, docs, and local tools
+reference/
+pwa-code-inspector/
+docs/
+tasks/
+plancombine
+apps-script/
 
 # Scripts & temporary files
 tmp/

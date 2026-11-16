@@ -136,7 +136,8 @@
   grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr);
   gap: 18px;
 }
-.dash-grid + .dash-grid {
+.dash-grid + .dash-grid,
+.dash-grid + .dash-card {
   margin-top: 18px;
 }
 .dash-card {

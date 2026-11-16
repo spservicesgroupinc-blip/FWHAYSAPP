@@ -14,9 +14,7 @@
   },
   "include": [
     "src",
-    "tests",
-    "scripts",
-    "vite.config.ts",
-    "playwright.config.ts"
+    "scripts/workspace-dev-api.ts",
+    "vite.config.ts"
   ]
 }

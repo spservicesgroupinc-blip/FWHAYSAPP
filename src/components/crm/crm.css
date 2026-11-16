@@ -503,6 +503,7 @@
   .crm-profile-actions {
     width: 100%;
     justify-content: flex-end;
+    flex-wrap: wrap;
   }
   .crm-form {
     grid-template-columns: 1fr;
@@ -515,8 +516,27 @@
   }
   .crm-head {
     flex-direction: column;
+    align-items: stretch;
   }
   .crm-head .button {
     width: 100%;
+    justify-content: center;
+  }
+  .crm-card {
+    flex-wrap: wrap;
+    align-items: flex-start;
+    padding: 14px;
+    gap: 10px 12px;
+  }
+  .crm-card-stats {
+    width: 100%;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-start;
+    padding-left: 54px;
+  }
+  .crm-card-open {
+    display: none;
   }
 }
