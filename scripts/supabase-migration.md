@@ -12,3 +12,18 @@ These tools preserve legacy record IDs, payload values and revisions. File bytes
 The tools do not configure Auth, grant staff access, freeze source writers, or switch the frontend. The service credential bypasses RLS; validate end-user authorization independently. They do not enumerate additional Drive history or orphaned files absent from the supplied bundle. Only supplied parsed snapshot JSON is archived, not the original JSON text formatting. Migration receipts preserve source mutation envelopes inside those snapshots; legacy mutation IDs are not activated as new user's operation receipts.
 
 The importer is deliberately insert-only. Do not import a rehearsal into a destination that will accept staff writes before final migration. A changed source after rehearsal requires an explicit reconciliation/cutover strategy or a clean, isolated destination, rather than overwriting destination edits. No automated cleanup or deletion is performed. Back up database and object bytes independently before making operational changes.
+
+## Current FWHAYSAPP rollout
+
+The hosted project is `uvxuovedcgtfnpigmhsp`. The administrator membership for
+`spservicesgroupinc@gmail.com` is active, the `file-storage` Edge Function is
+deployed with JWT verification, and the staged source bundle has loaded 231
+records (85 customers, 28 workspaces, 109 jobs, 6 requests, 2 activities and
+1 customer-reference snapshot; document/task tables remain empty).
+
+The staged bundle contains 45 private objects (40 JSON snapshots and 5
+attachments). Those bytes are intentionally not marked migrated until a
+server-only Supabase secret is present for the importer. Set that secret in a
+local environment (never in `VITE_*` or chat), rerun the documented `--apply`
+command, then run reconciliation. This avoids creating database pointers to
+objects that have not been verified in Storage.
