@@ -11,17 +11,20 @@ function WorkspacePreview() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [signingOut, setSigningOut] = useState(false);
+  const [retryVersion, setRetryVersion] = useState(0);
 
   useEffect(() => {
     const client = getSupabaseClient();
     if (!client) { setLoading(false); setError("The workspace service is not configured."); return; }
     let current = true;
+    setLoading(true);
+    setError("");
     void listSupabaseWorkspaces(client).then((page) => {
       if (current) { setWorkspaces(page.workspaces); setCursor(page.nextCursor); setError(""); }
     }, () => { if (current) setError("Unable to load workspaces. Check your connection and try again."); })
       .finally(() => { if (current) setLoading(false); });
     return () => { current = false; };
-  }, []);
+  }, [retryVersion]);
 
   async function loadMore() {
     const client = getSupabaseClient();
@@ -54,6 +57,7 @@ function WorkspacePreview() {
     <p>Sign-in is complete. This preview shows jobs available in the new workspace.</p>
     <h2>Jobs</h2>
     {error && <p role="alert">{error}</p>}
+    {error && !loading && <button className="button" onClick={() => setRetryVersion(value => value + 1)}>Try loading jobs again</button>}
     {loading && <p role="status">Loading jobs…</p>}
     {!loading && !error && workspaces.length === 0 && <p>No jobs are available yet.</p>}
     {workspaces.length > 0 && <ul>{workspaces.map((workspace) => <li key={workspace.id}>

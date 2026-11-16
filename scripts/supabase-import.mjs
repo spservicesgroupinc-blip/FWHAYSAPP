@@ -1,30 +1,19 @@
-import { readFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { buildImportPlan } from './supabase-import-plan.mjs';
+import { prepareBundle,createDestination,importPrepared } from './supabase-migration-lib.mjs';
 
-// Deliberately offline: the source inventory is useful for rehearsal, but no
-// destination mapping, uploader, or import transaction has been verified.
-export async function runImport(bundlePath, ...extra) {
-  if (extra.length) throw new Error('Destination options and credentials are not accepted.');
-  const path = resolve(bundlePath);
-  const bundle = JSON.parse(await readFile(path, 'utf8'));
-  const plan = await buildImportPlan(bundle, dirname(path));
-  return { ...plan, imported: false, outcome: 'blocked' };
+export async function runImport(bundlePath, options={}) {
+  if (!options || typeof options!=='object' || Object.keys(options).some(key=>!['apply','destination','expectedDigest'].includes(key))) throw new Error('Unsupported options; credentials are not accepted');
+  const plan=await prepareBundle(bundlePath);
+  if (!options.apply) return {mode:'dry-run',imported:false,sourceDigest:plan.sourceDigest,counts:plan.counts,files:plan.files.length};
+  if (options.expectedDigest!==plan.sourceDigest) throw new Error('Source digest confirmation required');
+  const destination=options.destination||await createDestination();
+  return {...await importPrepared(plan,destination),imported:true};
 }
-
 async function main() {
-  if (process.argv.length !== 3 || process.argv[2].startsWith('-')) {
-    process.stderr.write('Usage: node scripts/supabase-import.mjs <bundle.json>\nOffline validation only; importing is disabled. Do not supply credentials.\n');
-    process.exitCode = 1;
-    return;
-  }
-  try {
-    process.stdout.write(`${JSON.stringify(await runImport(process.argv[2]), null, 2)}\n`);
-  } catch {
-    process.stderr.write('Import blocked: source bundle is invalid or unreadable.\n');
-  }
-  process.exitCode = 1;
+  const args=process.argv.slice(2);
+  if (args.length<1||args.length>2||args[0].startsWith('-')||(args[1]&&args[1]!=='--apply')) throw new Error('Usage');
+  const result=await runImport(args[0],{apply:args[1]==='--apply',expectedDigest:process.env.SUPABASE_IMPORT_SOURCE_DIGEST});
+  process.stdout.write(`${JSON.stringify(result,null,2)}\n`);
 }
-
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) await main();
+if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href) main().catch(()=>{process.stderr.write('Import failed. Validate the source bundle, project configuration and destination state. No existing records are overwritten.\n');process.exitCode=1;});

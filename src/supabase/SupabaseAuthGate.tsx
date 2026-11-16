@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "rea
 import type { Session } from "@supabase/supabase-js";
 import { getSupabaseClient } from "./client";
 import { AuthForm } from "./AuthForm";
+import { authRedirectUrl } from "./authRoute";
 import "./auth.css";
 
 type Membership = "checking" | "allowed" | "denied" | "error";
@@ -76,7 +77,7 @@ export function SupabaseAuthGate({ children }: { children: ReactNode }) {
         setPassword("");
         setPasswordSetup(false);
       } else if (resetRequested) {
-        const redirectTo = `${window.location.origin}${window.location.pathname}`;
+        const redirectTo = authRedirectUrl(window.location);
         const { error } = await client.auth.resetPasswordForEmail(email.trim(), { redirectTo });
         if (error) throw error;
         setMessage("If this email has an account, a reset link will be sent. Check your inbox.");
