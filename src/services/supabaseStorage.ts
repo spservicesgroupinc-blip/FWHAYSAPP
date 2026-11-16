@@ -286,30 +286,18 @@ async function supabaseListRequests(): Promise<RequestSummary[]> {
   if (!client) throw new SupabaseStorageError("Supabase not configured", "NOT_CONFIGURED");
 
   const { data, error } = await client
-    .from("request_summaries")
-    .select("*")
-    .order("created_at", { ascending: false });
+    .from("requests")
+    .select("id, payload, revision, updated_at")
+    .order("updated_at", { ascending: false });
 
   if (error) throw new SupabaseStorageError(error.message, "QUERY_ERROR");
-  return (data || []).map(row => ({
-    ...(row.workspace_id ? { workspaceId: row.workspace_id } : {}),
-    ...(row.customer_id ? { customerId: row.customer_id } : {}),
-    id: row.id,
-    revision: row.revision,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-    status: row.status as RequestStatus,
-    estimatorName: row.estimator_name,
-    changesCount: row.changes_count,
-    attachmentsCount: row.attachments_count,
-    job: {
-      customer: row.job_customer,
-      jobNumber: row.job_number,
-      projectManager: row.project_manager,
-      orderNumber: row.order_number,
-      address: row.address,
-    },
-  }));
+  return (data || []).map(row => {
+    const payload = row.payload as ChangeRequest;
+    if (!payload?.id || payload.id !== row.id || !payload.job) {
+      throw new SupabaseStorageError("Invalid request data", "INVALID_DATA");
+    }
+    return summarizeRequest({ ...payload, revision: row.revision });
+  });
 }
 
 async function supabaseOpenRequest(id: string): Promise<ChangeRequest> {
