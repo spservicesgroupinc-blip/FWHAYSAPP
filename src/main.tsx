@@ -25,8 +25,14 @@ window.addEventListener("vite:preloadError", () => {
   window.location.reload();
 });
 
-registerSW({
+const updateSW = registerSW({
   immediate: true,
+  // Replace an already-open tab when a new deployment is available. This
+  // prevents a stale service-worker bundle from continuing to call retired
+  // Supabase RPCs after a backend migration.
+  onNeedRefresh() {
+    void updateSW(true);
+  },
   onRegisteredSW(_url, registration) {
     // Long-lived tabs pick up a new deployment within the hour.
     if (!registration) return;
