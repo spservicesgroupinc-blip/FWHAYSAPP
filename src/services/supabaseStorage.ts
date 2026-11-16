@@ -12,7 +12,7 @@ import type {
   RequestStatus,
   RequestSummary,
 } from "../types";
-import { getSupabaseClient } from "../supabase/client";
+import { getSupabaseClient, readSupabaseConfig } from "../supabase/client";
 import { uploadPrivateFile, downloadPrivateFile, type PrivateFilePort, type PrivateFileSpec } from "../supabase/privateFiles";
 
 const STORAGE_KEY_REQUESTS = "hays_change_orders_requests";
@@ -429,6 +429,52 @@ async function supabaseDeleteRequest(id: string): Promise<{ ok: boolean; message
   return { ok: true, message: "Request deleted." };
 }
 
+function createPrivateFilePort(client: NonNullable<ReturnType<typeof getSupabaseClient>>): PrivateFilePort {
+  const config = readSupabaseConfig(import.meta.env);
+  if (!config) throw new SupabaseStorageError("Supabase not configured", "NOT_CONFIGURED");
+  const endpoint = `${config.url}/functions/v1/file-storage`;
+  const publishableKey = config.publishableKey;
+  async function request(action: string, init: RequestInit = {}): Promise<Response> {
+    const { data } = await client.auth.getSession();
+    const token = data.session?.access_token;
+    if (!token) throw new SupabaseStorageError("Sign in required", "AUTH_REQUIRED");
+    return fetch(`${endpoint}?action=${action}`, {
+      ...init,
+      headers: {
+        apikey: publishableKey,
+        Authorization: `Bearer ${token}`,
+        ...(init.headers || {}),
+      },
+    });
+  }
+  async function jsonResponse(response: Response, code: string): Promise<any> {
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new SupabaseStorageError(body.error || `File operation failed (${response.status})`, code);
+    return body;
+  }
+  return {
+    async reserve(identity) {
+      const response = await request("reserve", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(identity) });
+      return jsonResponse(response, "RESERVE_ERROR");
+    },
+    async upload(ticket, data) {
+      const response = await request("upload", { method: "POST", headers: { "Content-Type": data.type || "application/octet-stream", "x-file-ticket": ticket }, body: data });
+      await jsonResponse(response, "UPLOAD_ERROR");
+    },
+    async finalize(ticket) {
+      const response = await request("finalize", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ticket }) });
+      return jsonResponse(response, "FINALIZE_ERROR");
+    },
+    async download(parentType, parentId, fileId) {
+      const response = await request("download", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ parentType, parentId, fileId }) });
+      if (!response.ok) throw new SupabaseStorageError("File unavailable", "DOWNLOAD_ERROR");
+      const encoded = response.headers.get("x-file-receipt");
+      if (!encoded) throw new SupabaseStorageError("Missing file receipt", "DOWNLOAD_ERROR");
+      return { receipt: JSON.parse(decodeURIComponent(encoded)), data: await response.blob() };
+    },
+  };
+}
+
 async function supabaseFetchAttachment(
   requestId: string,
   attachmentId: string,
@@ -436,42 +482,7 @@ async function supabaseFetchAttachment(
   const client = getSupabaseClient();
   if (!client) throw new SupabaseStorageError("Supabase not configured", "NOT_CONFIGURED");
 
-  // Use the private file port for authenticated downloads
-  const port: PrivateFilePort = {
-    async reserve(identity) {
-      const { data, error } = await client.rpc("reserve_file_upload", {
-        p_parent_type: "request",
-        p_parent_id: identity.parentId,
-        p_file_id: identity.fileId,
-        p_name: identity.name,
-        p_mime_type: identity.mimeType,
-        p_kind: identity.kind,
-        p_mutation_id: identity.mutationId,
-        p_size: identity.size,
-        p_sha256: identity.sha256,
-      });
-      if (error) throw new SupabaseStorageError(error.message, "RESERVE_ERROR");
-      return data;
-    },
-    async upload(ticket, data) {
-      const { error } = await client.storage.from("hays-private").upload(ticket, data);
-      if (error) throw new SupabaseStorageError(error.message, "UPLOAD_ERROR");
-    },
-    async finalize(ticket) {
-      const { data, error } = await client.rpc("finalize_file_upload", { p_ticket: ticket });
-      if (error) throw new SupabaseStorageError(error.message, "FINALIZE_ERROR");
-      return data;
-    },
-    async download(parentType, parentId, fileId) {
-      const { data, error } = await client.rpc("download_file", {
-        p_parent_type: parentType,
-        p_parent_id: parentId,
-        p_file_id: fileId,
-      });
-      if (error) throw new SupabaseStorageError(error.message, "DOWNLOAD_ERROR");
-      return data;
-    },
-  };
+  const port = createPrivateFilePort(client);
 
   return downloadPrivateFile(port, "request", requestId, attachmentId);
 }
@@ -495,41 +506,7 @@ async function supabaseUploadAttachment(
     kind: file.kind,
   };
 
-  const port: PrivateFilePort = {
-    async reserve(identity) {
-      const { data, error } = await client.rpc("reserve_file_upload", {
-        p_parent_type: "request",
-        p_parent_id: identity.parentId,
-        p_file_id: identity.fileId,
-        p_name: identity.name,
-        p_mime_type: identity.mimeType,
-        p_kind: identity.kind,
-        p_mutation_id: identity.mutationId,
-        p_size: identity.size,
-        p_sha256: identity.sha256,
-      });
-      if (error) throw new SupabaseStorageError(error.message, "RESERVE_ERROR");
-      return data;
-    },
-    async upload(ticket, data) {
-      const { error } = await client.storage.from("hays-private").upload(ticket, data);
-      if (error) throw new SupabaseStorageError(error.message, "UPLOAD_ERROR");
-    },
-    async finalize(ticket) {
-      const { data, error } = await client.rpc("finalize_file_upload", { p_ticket: ticket });
-      if (error) throw new SupabaseStorageError(error.message, "FINALIZE_ERROR");
-      return data;
-    },
-    async download(parentType, parentId, fileId) {
-      const { data, error } = await client.rpc("download_file", {
-        p_parent_type: parentType,
-        p_parent_id: parentId,
-        p_file_id: fileId,
-      });
-      if (error) throw new SupabaseStorageError(error.message, "DOWNLOAD_ERROR");
-      return data;
-    },
-  };
+  const port = createPrivateFilePort(client);
 
   const receipt = await uploadPrivateFile(port, spec, blob, mutationId);
   
