@@ -5,7 +5,13 @@ import { MAX_BYTES, validIdentity, verifyBytes } from './validation.ts';
 // identity or service keys into the trusted actor argument.
 Deno.serve(async (req: Request) => {
   const origin=req.headers.get('origin');
-  const allowed=(Deno.env.get('FILE_ALLOWED_ORIGINS')??'http://localhost:3000,http://127.0.0.1:3000').split(',').map(s=>s.trim()).filter(Boolean);
+  const allowed=(Deno.env.get('FILE_ALLOWED_ORIGINS')??[
+    'http://localhost:3000',
+    'http://127.0.0.1:3000',
+    'https://fwhaysapp-6b44.vercel.app',
+    'https://fwhaysapp-rfe-foams-projects.vercel.app',
+    'https://fwhaysapp.vercel.app',
+  ].join(',')).split(',').map(s=>s.trim()).filter(Boolean);
   const headers: Record<string,string>={'Cache-Control':'no-store','Vary':'Origin','Access-Control-Allow-Headers':'authorization,apikey,content-type,x-client-info,x-file-ticket','Access-Control-Allow-Methods':'POST,OPTIONS','Access-Control-Expose-Headers':'x-file-receipt'};
   if (origin && !allowed.includes(origin)) return new Response('Origin denied',{status:403,headers});
   if(origin) headers['Access-Control-Allow-Origin']=origin;
