@@ -55,7 +55,9 @@ export function SupabaseAuthGate({ children }: { children: ReactNode | ((role: S
         const active = data?.active === true;
         const role = (data?.role ?? null) as StaffRole;
         setStaffRole(role);
-        setMembership(error ? "error" : active && (role === "admin" || role === "staff") ? "allowed" : "denied");
+        // Every active staff member can use the shared app. The role is
+        // informational for UI behavior; it is not an app-wide access gate.
+        setMembership(error ? "error" : active && !!role ? "allowed" : "denied");
       }, () => { if (current && generation === membershipGeneration.current) setMembership("error"); });
     return () => { current = false; };
   }, [client, session, passwordSetup, checkVersion]);
