@@ -1,5 +1,5 @@
 import type { ChangeRequest, JobEntry, RequestAttachment } from "../types";
-import { API_URL, type uploadAttachment } from "./storage";
+import { type uploadAttachment } from "./storage";
 
 export interface DraftFile { name: string; type: string; lastModified: number; blob: Blob }
 export interface DraftPhoto extends DraftFile { id: string; edited: boolean }
@@ -119,14 +119,14 @@ async function operation<T>(
   });
 }
 
-export const readDraft = (id: string, scope = API_URL) =>
+export const readDraft = (id: string, scope = "supabase") =>
   operation<RequestDraft | undefined>(
     "readonly",
     store => store.get([scope, id]),
     () => memoryDrafts.get(draftKey(scope, id)),
   );
 
-export async function listDrafts(scope = API_URL) {
+export async function listDrafts(scope = "supabase") {
   return operation<RequestDraft[]>(
     "readonly",
     store => store.getAll(),
@@ -211,7 +211,7 @@ export async function saveDraft(row: RequestDraft) {
   });
 }
 
-export async function deleteDraft(id: string, scope = API_URL) {
+export async function deleteDraft(id: string, scope = "supabase") {
   await operation(
     "readwrite",
     store => store.delete([scope, id]),

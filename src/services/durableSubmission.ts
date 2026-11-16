@@ -1,5 +1,5 @@
 import { newId, type ChangeRequest } from "../types";
-import { API_URL, blobToBase64, saveRequest, sendRequestEmail, uploadAttachment } from "./storage";
+import { blobToBase64, saveRequest, sendRequestEmail, uploadAttachment } from "./storage";
 import { preparePhotoForUpload } from "./photoUpload";
 import { readDraft, saveDraft, deleteDraft, type RequestDraft } from "./requestDrafts";
 
@@ -25,7 +25,7 @@ export async function queueDraftSubmission(draft: RequestDraft, request: ChangeR
 
 const running = new Map<string, Promise<string>>();
 /** A tab lock prevents overlapping recovery; checkpoints survive response loss. */
-export function runDraftSubmission(id: string, scope = API_URL, api = defaultApi): Promise<string> {
+export function runDraftSubmission(id: string, scope = "supabase", api = defaultApi): Promise<string> {
   const key = scope + ":" + id;
   const existing = running.get(key);
   if (existing) return existing;

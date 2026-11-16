@@ -6,6 +6,7 @@
 
 import { getSupabaseClient } from "../supabase/client";
 import { saveSupabaseRecord, SupabaseRecordError } from "../supabase/records";
+import { appendSupabaseActivity } from "../supabase/activities";
 import { SupabaseStorageError } from "../services/supabaseStorage";
 import {
   getLocalCustomer,
@@ -287,8 +288,8 @@ async function syncNow(): Promise<void> {
         const saved = await saveSupabaseRecord(client, "tasks", mutation.entity, mutation.expectedRevision, mutation.mutationId);
         await putTask(saved);
       } else {
-        // No verified append-only activity operation is available yet.
-        throw new SupabaseStorageError("Activity sync is not available in this migration build.", "NOT_IMPLEMENTED");
+        const saved = await appendSupabaseActivity(client, mutation.entity, mutation.mutationId);
+        await putActivity(saved);
       }
       pending.delete(entryKey);
     } catch (error) {

@@ -27,7 +27,11 @@ let client: SupabaseClient | null | undefined;
 
 export function getSupabaseClient(): SupabaseClient | null {
   if (client !== undefined) return client;
-  const config = readSupabaseConfig(import.meta.env);
-  client = config ? createClient(config.url, config.publishableKey) : null;
+  try {
+    const config = readSupabaseConfig(import.meta.env);
+    client = config ? createClient(config.url, config.publishableKey) : null;
+  } catch {
+    client = null;
+  }
   return client;
 }

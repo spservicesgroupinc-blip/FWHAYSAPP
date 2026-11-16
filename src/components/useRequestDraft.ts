@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { API_URL } from "../services/storage";
 import { saveDraft, type DraftValues, type RequestDraft } from "../services/requestDrafts";
+
+const DRAFT_SCOPE = "supabase";
 
 export function useRequestDraft(id: string, values: DraftValues, frozen: React.MutableRefObject<boolean>, onLeaveGuard?: (guard:(()=>boolean)|null)=>void) {
   const [status,setStatus]=useState("Draft not started");
@@ -11,7 +12,7 @@ export function useRequestDraft(id: string, values: DraftValues, frozen: React.M
   const mounted=useRef(true);
   const latest=useRef(values);latest.current=values;
   const persist=() => {
-    const row:RequestDraft={id,scope:API_URL,updatedAt:new Date().toISOString(),values:latest.current};
+    const row:RequestDraft={id,scope:DRAFT_SCOPE,updatedAt:new Date().toISOString(),values:latest.current};
     saving.current=true;
     if(mounted.current)setStatus("Saving draft…");
     const task=writes.current.catch(()=>undefined).then(()=>saveDraft(row));

@@ -340,8 +340,8 @@ async function supabaseSaveRequest(
   const client = getSupabaseClient();
   if (!client) throw new SupabaseStorageError("Supabase not configured", "NOT_CONFIGURED");
 
-  const { data, error } = await client.rpc("save_record", {
-    p_table: "requests", p_id: request.id, p_payload: request,
+  const { data, error } = await client.rpc("save_record_requests", {
+    p_id: request.id, p_payload: request,
     p_expected_revision: expectedRevision, p_mutation_id: mutationId,
   });
   if (error) throw new SupabaseStorageError(error.message, error.code === "40001" ? "CONFLICT" : "SAVE_ERROR");
@@ -466,7 +466,7 @@ async function supabaseFetchAttachment(
       return data;
     },
     async upload(ticket, data) {
-      const { error } = await client.storage.from("hays-attachments").upload(ticket, data);
+      const { error } = await client.storage.from("hays-private").upload(ticket, data);
       if (error) throw new SupabaseStorageError(error.message, "UPLOAD_ERROR");
     },
     async finalize(ticket) {
@@ -524,7 +524,7 @@ async function supabaseUploadAttachment(
       return data;
     },
     async upload(ticket, data) {
-      const { error } = await client.storage.from("hays-attachments").upload(ticket, data);
+      const { error } = await client.storage.from("hays-private").upload(ticket, data);
       if (error) throw new SupabaseStorageError(error.message, "UPLOAD_ERROR");
     },
     async finalize(ticket) {
