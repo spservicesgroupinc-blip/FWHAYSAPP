@@ -3,6 +3,7 @@ import type { Session } from "@supabase/supabase-js";
 import { getSupabaseClient } from "./client";
 import { AuthForm } from "./AuthForm";
 import { authRedirectUrl } from "./authRoute";
+import { membershipCheckKey } from "./authMembership";
 import "./auth.css";
 
 type Membership = "checking" | "allowed" | "denied" | "error";
@@ -27,14 +28,12 @@ export function SupabaseAuthGate({ children }: { children: ReactNode | ((role: S
   const [message, setMessage] = useState("");
   const [resetRequested, setResetRequested] = useState(false);
   const membershipGeneration = useRef(0);
+  const userId = session?.user.id ?? null;
+  const membershipKey = membershipCheckKey(userId, passwordSetup, checkVersion);
 
   useEffect(() => {
     if (!client) return;
     const { data } = client.auth.onAuthStateChange((event, nextSession) => {
-      // Never reuse a prior account's membership while a new session is checked.
-      membershipGeneration.current += 1;
-      setMembership("checking");
-      setCheckVersion((value) => value + 1);
       if (event === "PASSWORD_RECOVERY") { setResetRequested(false); setPasswordSetup(true); }
       if (event === "SIGNED_OUT") setPasswordSetup(false);
       setSession(nextSession);
@@ -44,12 +43,12 @@ export function SupabaseAuthGate({ children }: { children: ReactNode | ((role: S
   }, [client]);
 
   useEffect(() => {
-    if (!client || !session || passwordSetup) return;
+    if (!client || !userId || !membershipKey) return;
     let current = true;
     const generation = ++membershipGeneration.current;
     setMembership("checking");
     setStaffRole(null);
-    void client.from("staff_members").select("role,active").eq("user_id", session.user.id).maybeSingle()
+    void client.from("staff_members").select("role,active").eq("user_id", userId).maybeSingle()
       .then(({ data, error }) => {
         if (!current || generation !== membershipGeneration.current) return;
         const active = data?.active === true;
@@ -60,18 +59,7 @@ export function SupabaseAuthGate({ children }: { children: ReactNode | ((role: S
         setMembership(error ? "error" : active && !!role ? "allowed" : "denied");
       }, () => { if (current && generation === membershipGeneration.current) setMembership("error"); });
     return () => { current = false; };
-  }, [client, session, passwordSetup, checkVersion]);
-
-  useEffect(() => {
-    if (!session) return;
-    const refresh = () => {
-      membershipGeneration.current += 1;
-      setMembership("checking");
-      setCheckVersion((value) => value + 1);
-    };
-    window.addEventListener("focus", refresh);
-    return () => window.removeEventListener("focus", refresh);
-  }, [session]);
+  }, [client, userId, membershipKey]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();

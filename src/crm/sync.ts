@@ -1,6 +1,7 @@
 import { getSupabaseClient } from "../supabase/client";
 import { saveSupabaseRecord, SupabaseRecordError } from "../supabase/records";
 import { appendSupabaseActivity } from "../supabase/activities";
+import { createSingleFlight } from "../services/singleFlight";
 import {
   getLocalCustomer,
   putActivity,
@@ -37,9 +38,10 @@ function schedule(delay = 30000): void {
   if (timer) clearTimeout(timer);
   timer = setTimeout(() => {
     timer = undefined;
-    void syncNow().then(
+    void runSync().then(
       () => {
         retryDelay = 3000;
+        if (pending.size) schedule(0);
       },
       () => {
         schedule(retryDelay);
@@ -258,3 +260,8 @@ async function syncNow(): Promise<void> {
   emitCrm();
   if (failure) throw failure;
 }
+
+// Several UI events and tabs can request a sync at once. Keep only one pass
+// active so retries for the same mutation do not pile up on the same database
+// advisory lock and exhaust the PostgREST connection pool.
+const runSync = createSingleFlight(syncNow);
